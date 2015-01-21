@@ -570,7 +570,8 @@ EXPORT_SYMBOL_GPL(qpnp_batif_unregist_batt_present);
 
 static void notify_batt_insert_remove_event(u8 batt_present)
 {
-#if defined(CONFIG_MACH_MSM8974_G2_KR) || defined(CONFIG_MACH_MSM8974_B1_KR)
+#if defined(CONFIG_MACH_MSM8974_G2_KR) || defined(CONFIG_MACH_MSM8974_B1_KR) \
+	|| defined(CONFIG_MACH_MSM8974_B1W) || defined(CONFIG_MACH_MSM8974_TIGERS_KR)
 	batt_present = !!batt_present;
 	if (notify_batt_pres_func_ptr) {
 		pr_debug("notifying batt_present\n");
