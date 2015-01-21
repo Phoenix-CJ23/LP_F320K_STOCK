@@ -15,6 +15,7 @@
 #include <linux/slab.h>
 #include <linux/stat.h>
 #include <linux/fault-inject.h>
+#include <linux/uaccess.h>
 
 #include <linux/mmc/card.h>
 #include <linux/mmc/host.h>
@@ -137,6 +138,9 @@ static int mmc_ios_show(struct seq_file *s, void *data)
 		break;
 	case MMC_TIMING_MMC_HS200:
 		str = "mmc high-speed SDR200";
+		break;
+	case MMC_TIMING_MMC_HS400:
+		str = "mmc high-speed DDR200";
 		break;
 	default:
 		str = "invalid";
@@ -306,10 +310,12 @@ DEFINE_SIMPLE_ATTRIBUTE(mmc_dbg_card_status_fops, mmc_dbg_card_status_get,
 		NULL, "%08llx\n");
 
 #ifdef CONFIG_MACH_LGE
-/*           
-                                                                     
-                           
-*/
+	/*           
+                                                  
+                                                            
+                                                                       
+                                 
+  */
 static int mmc_ext_csd_read(struct seq_file *s, void *data)
 #else
 #define EXT_CSD_STR_LEN 1025
@@ -319,9 +325,8 @@ static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
 {
 #ifdef CONFIG_MACH_LGE
 	/*           
-                                                                      
-                            
- */
+                                 
+  */
 	struct mmc_card *card = s->private;
 #else
 	struct mmc_card *card = inode->i_private;
@@ -331,12 +336,16 @@ static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
 	u8 *ext_csd;
 #ifdef CONFIG_MACH_LGE
 	/*           
-                                                                      
-                            
- */
+                                 
+  */
 	u8 ext_csd_rev;
 	int err;
 	const char *str;
+	char *buf_for_health_report;
+	char *buf_for_firmwware_version;
+	ssize_t output = 0;
+	int cnt;
+
 #else
 	int err, i;
 
@@ -359,9 +368,8 @@ static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
 		goto out_free;
 #ifdef CONFIG_MACH_LGE
 	/*           
-                                                                      
-                            
- */
+                                 
+  */
 	ext_csd_rev = ext_csd[192];
 #else
 	for (i = 511; i >= 0; i--)
@@ -376,33 +384,35 @@ static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
 
 #ifdef CONFIG_MACH_LGE
 	/*           
-                                                                       
-                           
+                                 
   */
 
 	switch (ext_csd_rev) {
+	case 7:
+		str = "v5.0";
+		break;
 	case 6:
-		str = "4.5";
+		str = "v4.5, v4.51";
 		break;
 	case 5:
-		str = "4.41";
+		str = "v4.41";
 		break;
 	case 3:
-		str = "4.3";
+		str = "v4.3";
 		break;
 	case 2:
-		str = "4.2";
+		str = "v4.2";
 		break;
 	case 1:
-		str = "4.1";
+		str = "v4.1";
 		break;
 	case 0:
-		str = "4.0";
+		str = "v4.0";
 		break;
 	default:
 		goto out_free;
 	}
-	seq_printf(s, "Extended CSD rev 1.%d (MMC %s)\n", ext_csd_rev, str);
+	seq_printf(s, "Extended CSD rev 1.%d (for MMC %s)\n", ext_csd_rev, str);
 
 	if (ext_csd_rev < 3)
 		goto out_free; /* No ext_csd */
@@ -411,7 +421,12 @@ static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
 	 * Reserved bit should be read as "0" in case of spec older
 	 * than A441.
 	 */
+	/* B50: reserved [511:506] */
 	/* B45: reserved [511:505] */
+
+	if (ext_csd_rev >= 7)
+		seq_printf(s, "[505] Extended Security Commands Error, ext_security_err: 0x%02x\n", ext_csd[505]);
+
 	seq_printf(s, "[504] Supported Command Sets, s_cmd_set: 0x%02x\n", ext_csd[504]);
 	seq_printf(s, "[503] HPI features, hpi_features: 0x%02x\n", ext_csd[503]);
 	seq_printf(s, "[502] Background operations support, bkops_support: 0x%02x\n", ext_csd[502]);
@@ -425,16 +440,56 @@ static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
 		seq_printf(s, "[496] Context management capabilities, context_capabilities: 0x%02x\n", ext_csd[496]);
 		seq_printf(s, "[495] Large Unit size, large_unit_size_m1: 0x%02x\n", ext_csd[495]);
 		seq_printf(s, "[494] Extended partitions attribute support, ext_support: 0x%02x\n", ext_csd[494]);
+		if (ext_csd_rev >= 7) {
+			buf_for_health_report = kmalloc(66, GFP_KERNEL);
+			if (!buf_for_health_report)
+				return -ENOMEM;
+
+			buf_for_firmwware_version = kmalloc(18, GFP_KERNEL);
+			if (!buf_for_firmwware_version)
+				return -ENOMEM;
+
+			seq_printf(s, "[493] Supported modes, supported_modes: 0x%02x\n", ext_csd[493]);
+			seq_printf(s, "[492] FFU features, FFU_FEATURES: 0x%02x\n", ext_csd[492]);
+			seq_printf(s, "[491] Operation codes timeout, operation_code_timeout: 0x%02x\n", ext_csd[491]);
+			seq_printf(s, "[490:487] FFU Argument, FFU_ARG: 0x%08x\n", (ext_csd[487] << 0) | (ext_csd[488] << 8) | (ext_csd[489] << 16) | (ext_csd[490] << 24));
+			/* B50: reserved [486:306] */
+			seq_printf(s, "[305:302] Number of FW sectors correctly programmed, number_of_fw_sectors_correctly_programmed: 0x%x\n", (ext_csd[302] << 0) | (ext_csd[303] << 8) | (ext_csd[304] << 16) | (ext_csd[305] << 24));
+
+			output = 0;
+			for (cnt = 301 ; cnt >= 270 ; cnt--)
+				output += snprintf(buf_for_health_report + output, 3, "%02x", ext_csd[cnt]);
+			output += snprintf(buf_for_health_report + output, 2, "\n");
+			seq_printf(s, "[301:270] Vendor proprietary health report, vendor_proprietary_health_report: %s", buf_for_health_report);
+			kfree(buf_for_health_report);
+
+			seq_printf(s, "[269] Device life time estimation type B, device_life_time_est_typ_b: 0x%02x\n", ext_csd[269]);
+			seq_printf(s, "[268] Device life time estimation type A, device_life_time_est_typ_a: 0x%02x\n", ext_csd[268]);
+			seq_printf(s, "[267] Pre EOL information, pre_eol_info: 0x%02x\n", ext_csd[267]);
+			seq_printf(s, "[266] Optimal read size, optimal_read_size: 0x%02x\n", ext_csd[266]);
+			seq_printf(s, "[265] Optimal write size, optimal_write_size: 0x%02x\n", ext_csd[265]);
+			seq_printf(s, "[264] Optimal trim unit size, optimal_trim_unit_size: 0x%02x\n", ext_csd[264]);
+			seq_printf(s, "[263:262] Device version, device_version: 0x%02x\n", (ext_csd[262] << 0) | (ext_csd[263] << 8));
+
+			output = 0;
+			for (cnt = 261 ; cnt >= 254 ; cnt--)
+				output += snprintf(buf_for_firmwware_version + output, 3, "%02x", ext_csd[cnt]);
+			output += snprintf(buf_for_firmwware_version + output, 2, "\n");
+			seq_printf(s, "[261:254] Firmware version, firmwware_version: %s", buf_for_firmwware_version);
+			kfree(buf_for_firmwware_version);
+
+			seq_printf(s, "[253] Power class for 200MHz, DDR at VCC=3.6V, pwr_cl_ddr_200_360: 0x%02x\n", ext_csd[253]);
+		}
 		/* B45: reserved [493:253] */
-		seq_printf(s, "[252:249] Cache size, cache_size %d KiB\n", ext_csd[249] << 0 |
+		seq_printf(s, "[252:249] Cache size, cache_size %d KiB\n", (ext_csd[249] << 0) |
 				(ext_csd[250] << 8) | (ext_csd[251] << 16) |
 				(ext_csd[252] << 24));
 		seq_printf(s, "[248] Generic CMD6 timeout, generic_cmd6_time: 0x%02x\n", ext_csd[248]);
 		seq_printf(s, "[247] Power off notification timeout, power_off_long_time: 0x%02x\n", ext_csd[247]);
 		seq_printf(s, "[246] Background operations status, bkops_status: 0x%02x\n", ext_csd[246]);
-		seq_printf(s, "[245:242] Number of correctly programmed sectors, correctly_prg_sectors_num %d KiB\n", ext_csd[242] << 0 |
-				(ext_csd[243] << 8) | (ext_csd[244] << 16) |
-				(ext_csd[245] << 24));
+		seq_printf(s, "[245:242] Number of correctly programmed sectors, correctly_prg_sectors_num %d KiB\n", (ext_csd[242] << 0) |
+																						(ext_csd[243] << 8) | (ext_csd[244] << 16) |
+																												(ext_csd[245] << 24));
 
 	}
 	/* B45: Reserved [493:253]
@@ -442,8 +497,7 @@ static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
 	 * A43: reserved [246:229] */
 	if (ext_csd_rev >= 5) {
 		seq_printf(s, "[241] 1st initialization time after partitioning, ini_timeout_ap: 0x%02x\n", ext_csd[241]);
-		/* B45: reserved [240] */
-		/* A441: reserved [240] */
+		/* B50, B45, A441: reserved [240] */
 		seq_printf(s, "[239] Power class for 52MHz, DDR at 3.6V, pwr_cl_ddr_52_360: 0x%02x\n", ext_csd[239]);
 		seq_printf(s, "[238] POwer class for 52MHz, DDR at 1.95V, pwr_cl_ddr_52_195: 0x%02x\n", ext_csd[238]);
 
@@ -456,18 +510,16 @@ static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
 
 		seq_printf(s, "[235] Minimun Write Performance for 8bit at 52MHz in DDR mode, min_perf_ddr_w_8_52: 0x%02x\n", ext_csd[235]);
 		seq_printf(s, "[234] Minimun Read Performance for 8bit at 52MHz in DDR modemin_perf_ddr_r_8_52: 0x%02x\n", ext_csd[234]);
-		/* B45: reserved [233] */
-		/* A441: reserved [233] */
+		/* B50, B45, A441: reserved [233] */
 		seq_printf(s, "[232] TRIM Multiplier, trim_mult: 0x%02x\n", ext_csd[232]);
 		seq_printf(s, "[231] Secure Feature support, sec_feature_support: 0x%02x\n", ext_csd[231]);
 	}
-	if (ext_csd_rev == 5) { /* Obsolete in 4.5 */
+	if (ext_csd_rev == 5 || ext_csd_rev == 7) { /* Obsolete in 4.5 */  /*---->revived in 5.0*/
 		seq_printf(s, "[230] Secure Erase Multiplier, sec_erase_mult: 0x%02x\n", ext_csd[230]);
 		seq_printf(s, "[229] Secure TRIM Multiplier, sec_trim_mult:  0x%02x\n", ext_csd[229]);
 	}
 	seq_printf(s, "[228] Boot information, boot_info: 0x%02x\n", ext_csd[228]);
-	/* B45: reserved [227] */
-	/* A441/A43: reserved [227] */
+	/* B50, B45, A441/A43: reserved [227] */
 	seq_printf(s, "[226] Boot partition size, boot_size_mult : 0x%02x\n", ext_csd[226]);
 	seq_printf(s, "[225] Access size, acc_size: 0x%02x\n", ext_csd[225]);
 	seq_printf(s, "[224] High-capacity erase unit size, hc_erase_grp_size: 0x%02x\n", ext_csd[224]);
@@ -476,14 +528,15 @@ static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
 	seq_printf(s, "[221] High-capacity write protect group size, hc_wp_grp_size: 0x%02x\n", ext_csd[221]);
 	seq_printf(s, "[220] Sleep current(VCC), s_c_vcc: 0x%02x\n", ext_csd[220]);
 	seq_printf(s, "[219] Sleep current(VCCQ), s_c_vccq: 0x%02x\n", ext_csd[219]);
-	/* B45: reserved [218] */
-	/* A441/A43: reserved [218] */
+	if (ext_csd_rev == 7)
+		seq_printf(s, "[218] Production state awareness timeout, production_state_awareness_timeout: 0x%02x\n", ext_csd[218]);
+	/* B45, A441/A43: reserved [218] */
 	seq_printf(s, "[217] Sleep/awake timeout, s_a_timeout: 0x%02x\n", ext_csd[217]);
-	/* B45: reserved [216] */
-	/* A441/A43: reserved [216] */
+	if (ext_csd_rev == 7)
+		seq_printf(s, "[216] Sleep notification timeout, sleep_notification_time: 0x%02x\n", ext_csd[216]);
+	/* B45, A441/A43: reserved [216] */
 	seq_printf(s, "[215:212] Sector Count, sec_count: 0x%08x\n", (ext_csd[215] << 24) | (ext_csd[214] << 16) | (ext_csd[213] << 8)  | ext_csd[212]);
-	/* B45: reserved [211] */
-	/* A441/A43: reserved [211] */
+	/* B50, B45, A441/A43: reserved [211] */
 	seq_printf(s, "[210] Minimum Write Performance for 8bit at 52MHz, min_perf_w_8_52: 0x%02x\n", ext_csd[210]);
 	seq_printf(s, "[209] Minimum Read Performance for 8bit at 52MHz, min_perf_r_8_52: 0x%02x\n", ext_csd[209]);
 	seq_printf(s, "[208] Minimum Write Performance for 8bit at 26MHz, for 4bit at 52MHz, min_perf_w_8_26_4_52: 0x%02x\n", ext_csd[208]);
@@ -503,7 +556,7 @@ static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
 		seq_printf(s, "[198] Out-of-interrupt busy timing, out_of_interrupt_time: 0x%02x\n", ext_csd[198]);
 	}
 
-	/* B45: reserved [195] [193] [190] [188] [186] [184] [182] [180] [176] */
+	/* B50, B45: reserved [195] [193] [190] [188] [186] [184] [182] [180] [176] */
 	/* A441/A43: reserved   [197] [195] [193] [190] [188]
 	 * [186] [184] [182] [180] [176] */
 
@@ -544,17 +597,19 @@ static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
 		seq_printf(s, "[159:157] Max Enhanced Area Size, max_enh_size_mult: 0x%06x\n", (ext_csd[159] << 16) | (ext_csd[158] << 8) | ext_csd[157]);
 		seq_printf(s, "[156] Partitions attribute, partitions_attribute: 0x%02x\n", ext_csd[156]);
 		seq_printf(s, "[155] Partitioning Setting, partition_setting_completed: 0x%02x\n", ext_csd[155]);
-		seq_printf(s, "[154:152] General Purpose Partition Size, gp_size_mult_4: 0x%06x\n", (ext_csd[154] << 16) | (ext_csd[153] << 8) | ext_csd[152]);
-		seq_printf(s, "[151:149] General Purpose Partition Size, gp_size_mult_3: 0x%06x\n", (ext_csd[151] << 16) | (ext_csd[150] << 8) | ext_csd[149]);
-		seq_printf(s, "[148:146] General Purpose Partition Size, gp_size_mult_2: 0x%06x\n", (ext_csd[148] << 16) | (ext_csd[147] << 8) | ext_csd[146]);
-		seq_printf(s, "[145:143] General Purpose Partition Size, gp_size_mult_1: 0x%06x\n", (ext_csd[145] << 16) | (ext_csd[144] << 8) | ext_csd[143]);
-		seq_printf(s, "[142:140] Enhanced User Data Area Size, enh_size_mult: 0x%06x\n", (ext_csd[142] << 16) | (ext_csd[141] << 8) | ext_csd[140]);
-		seq_printf(s, "[139:136] Enhanced User Data Start Address, enh_start_addr: 0x%06x\n", (ext_csd[139] << 24) | (ext_csd[138] << 16) | (ext_csd[137] << 8) | ext_csd[136]);
+		seq_printf(s, "[154:152] General Purpose Partition Size, gp_size_mult_4: 0x%x\n", (ext_csd[154] << 16) | (ext_csd[153] << 8) | ext_csd[152]);
+		seq_printf(s, "[151:149] General Purpose Partition Size, gp_size_mult_3: 0x%x\n", (ext_csd[151] << 16) | (ext_csd[150] << 8) | ext_csd[149]);
+		seq_printf(s, "[148:146] General Purpose Partition Size, gp_size_mult_2: 0x%x\n", (ext_csd[148] << 16) | (ext_csd[147] << 8) | ext_csd[146]);
+		seq_printf(s, "[145:143] General Purpose Partition Size, gp_size_mult_1: 0x%x\n", (ext_csd[145] << 16) | (ext_csd[144] << 8) | ext_csd[143]);
+		seq_printf(s, "[142:140] Enhanced User Data Area Size, enh_size_mult: 0x%x\n", (ext_csd[142] << 16) | (ext_csd[141] << 8) | ext_csd[140]);
+		seq_printf(s, "[139:136] Enhanced User Data Start Address, enh_start_addr: 0x%x\n", (ext_csd[139] << 24) | (ext_csd[138] << 16) | (ext_csd[137] << 8) | ext_csd[136]);
 
 		/* B45, A441: reserved [135] [133]  */
 		seq_printf(s, "[134] Bad Block Management mode, sec_bad_blk_mgmnt: 0x%02x\n", ext_csd[134]);
 		/* A441: reserved [133:0] */
 	}
+	if (ext_csd_rev >= 7)
+		seq_printf(s, "[133] Production State Awareness, PRODUCTION_STATE_AWARENESS: 0x%02x\n", ext_csd[133]);
 	/* B45 */
 	if (ext_csd_rev >= 6) {
 		int j;
@@ -574,11 +629,11 @@ static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
 		seq_printf(s, "[60] 1st initialization after disabling sector size emulation, ini_timeout_emu: 0x%02x\n", ext_csd[60]);
 		seq_printf(s, "[59] Class 6 commands control, class_6_ctrl: 0x%02x\n", ext_csd[59]);
 		seq_printf(s, "[58] Number of addressed group to be Released, dyncap_needed: 0x%02x\n", ext_csd[58]);
-		seq_printf(s, "[57:56] Exception events control, exception_events_ctrl: 0x%04x\n",
+		seq_printf(s, "[57:56] Exception events control, exception_events_ctrl: 0x%02x\n",
 				(ext_csd[57] << 8) | ext_csd[56]);
-		seq_printf(s, "[55:54] Exception events status, exception_events_status: 0x%04x\n",
+		seq_printf(s, "[55:54] Exception events status, exception_events_status: 0x%02x\n",
 				(ext_csd[55] << 8) | ext_csd[54]);
-		seq_printf(s, "[53:52] Extended Partitions Attribute, ext_partitions_attribute: 0x%04x\n",
+		seq_printf(s, "[53:52] Extended Partitions Attribute, ext_partitions_attribute: 0x%02x\n",
 				(ext_csd[53] << 8) | ext_csd[52]);
 		for (j = 51; j >= 37; j--)
 			seq_printf(s, "[51:37]Context configuration, context_conf[%d]: 0x%02x\n", j,
@@ -591,13 +646,21 @@ static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
 		/* flush_cache ext_csd[32] not readable */
 		/*Reserved [31:0] */
 	}
+	if (ext_csd_rev >= 7) {
+		seq_printf(s, "[30] Mode Config, MODE_CONFIG: 0x%02x\n", ext_csd[30]);
+		/* mode_operation_codes ext_csd[29] not readable */
+		seq_printf(s, "[26] FFU Status, FFU_STATUS: 0x%02x\n", ext_csd[26]);
+		seq_printf(s, "[25:22] Pre loading Data Size, PRE_LOADING_DATA_SIZE: 0x%08x\n", (ext_csd[22] << 0) | (ext_csd[23] << 8) | (ext_csd[24] << 16) | (ext_csd[25] << 24));
+		seq_printf(s, "[21:18] Max Pre Loading Data Size, MAX_PRE_LOADING_DATA_SIZE: 0x%08x\n", (ext_csd[18] << 0) | (ext_csd[19] << 8) | (ext_csd[20] << 16) | (ext_csd[21] << 24));
+		seq_printf(s, "[17] Product State Awareness Enablement, PRODUCT_STATE_AWARENESS_ENABLEMENT: 0x%02x\n", ext_csd[17]);
+		seq_printf(s, "[16] Secure Removal Type, SECURE_REMOVAL_TYPE: 0x%02x\n", ext_csd[16]);
+	}
 #endif
 out_free:
 #ifndef CONFIG_MACH_LGE
 	/*           
-                                                                      
-                            
- */
+                                 
+  */
 	kfree(buf);
 #endif
 	kfree(ext_csd);
@@ -605,10 +668,9 @@ out_free:
 }
 
 #ifdef CONFIG_MACH_LGE
-/*           
-                                                                     
-                           
-*/
+	/*           
+                                 
+  */
 static int mmc_ext_csd_open(struct inode *inode, struct file *file)
 #else
 static ssize_t mmc_ext_csd_read(struct file *filp, char __user *ubuf,
@@ -617,9 +679,8 @@ static ssize_t mmc_ext_csd_read(struct file *filp, char __user *ubuf,
 {
 #ifdef CONFIG_MACH_LGE
 	/*           
-                                                                      
-                            
- */
+                                 
+  */
 	return single_open(file, mmc_ext_csd_read, inode->i_private);
 #else
 	char *buf = filp->private_data;
@@ -639,12 +700,11 @@ static const struct file_operations mmc_dbg_ext_csd_fops = {
 	.open		= mmc_ext_csd_open,
 #ifdef CONFIG_MACH_LGE
 	/*           
-                                                                      
-                            
- */
-	.read		   = seq_read,
-	.llseek 		= seq_lseek,
-	.release		= single_release,
+                                 
+  */
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
 #else
 	.read		= mmc_ext_csd_read,
 	.release	= mmc_ext_csd_release,
@@ -672,6 +732,9 @@ static ssize_t mmc_wr_pack_stats_read(struct file *filp, char __user *ubuf,
 	char *temp_buf;
 
 	if (!card)
+		return cnt;
+
+	if (!access_ok(VERIFY_WRITE, ubuf, cnt))
 		return cnt;
 
 	if (!card->wr_pack_stats.print_in_read)
@@ -814,6 +877,9 @@ static ssize_t mmc_wr_pack_stats_write(struct file *filp,
 	if (!card)
 		return cnt;
 
+	if (!access_ok(VERIFY_READ, ubuf, cnt))
+		return cnt;
+
 	sscanf(ubuf, "%d", &value);
 	if (value) {
 		mmc_blk_init_packed_statistics(card);
@@ -851,6 +917,9 @@ static ssize_t mmc_bkops_stats_read(struct file *filp, char __user *ubuf,
 	char *temp_buf;
 
 	if (!card)
+		return cnt;
+
+	if (!access_ok(VERIFY_WRITE, ubuf, cnt))
 		return cnt;
 
 	bkops_stats = &card->bkops_info.bkops_stats;
@@ -917,6 +986,9 @@ static ssize_t mmc_bkops_stats_write(struct file *filp,
 	struct mmc_bkops_stats *bkops_stats;
 
 	if (!card)
+		return cnt;
+
+	if (!access_ok(VERIFY_READ, ubuf, cnt))
 		return cnt;
 
 	bkops_stats = &card->bkops_info.bkops_stats;
