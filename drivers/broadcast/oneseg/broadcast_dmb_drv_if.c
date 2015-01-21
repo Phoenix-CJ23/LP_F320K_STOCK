@@ -6,6 +6,7 @@
 #include <linux/device.h>
 #include <linux/kdev_t.h>
 #include <linux/uaccess.h>        /* copy_to_user */
+#include <linux/compat.h>
 
 #include "broadcast_dmb_typedef.h"
 #include "broadcast_dmb_drv_ifdef.h"
@@ -88,7 +89,7 @@ static int broadcast_dmb_set_channel(void __user *arg)
 		return ERROR;
 	}
 
-	if(copy_from_user(&udata, arg, sizeof(struct broadcast_dmb_set_ch_info)))
+	if(copy_from_user(&udata, (void*)(unsigned long)arg, sizeof(struct broadcast_dmb_set_ch_info)))
 	{
 		printk(KERN_ERR"[1seg]broadcast_dmb_set_ch copy_from_user fail!!! \n");
 		rc = ERROR;
@@ -132,7 +133,7 @@ static int broadcast_dmb_detect_sync(void __user *arg)
 		return ERROR;
 	}
 
-	if(copy_from_user(&udata, arg, sizeof(struct broadcast_dmb_sync_info)))
+	if(copy_from_user(&udata, (void*)(unsigned long)arg, sizeof(struct broadcast_dmb_sync_info)))
 	{
 		printk(KERN_ERR"broadcast_dmb_detect_sync copy_from_user fail!!! \n");
 		rc = ERROR;
@@ -144,7 +145,7 @@ static int broadcast_dmb_detect_sync(void __user *arg)
 		if(rc == ERROR)	
 			return ERROR;
 
-		if(copy_to_user((void *)arg, &udata, sizeof(struct broadcast_dmb_sync_info)))
+		if(copy_to_user((void *)(unsigned long)arg, &udata, sizeof(struct broadcast_dmb_sync_info)))
 		{
 			printk(KERN_ERR"[1seg]broadcast_dmb_detect_sync copy_to_user error!!! \n");
 			rc = ERROR;
@@ -168,7 +169,7 @@ static int broadcast_dmb_get_sig_info(void __user *arg)
 		return ERROR;
 	}
 	
-	if(copy_from_user(&udata, arg, sizeof(struct broadcast_dmb_control_info)))
+	if(copy_from_user(&udata, (void *)(unsigned long)arg, sizeof(struct broadcast_dmb_control_info)))
 	{
 		printk(KERN_ERR"[1seg]broadcast_dmb_get_sig_info copy_from_user fail!!! \n");
 		rc = ERROR;
@@ -183,7 +184,7 @@ static int broadcast_dmb_get_sig_info(void __user *arg)
 		return ERROR;
 	}
 
-	if(copy_to_user((void *)arg, &udata, sizeof(struct broadcast_dmb_control_info)))
+	if(copy_to_user((void *)(unsigned long)arg, &udata, sizeof(struct broadcast_dmb_control_info)))
 	{
 		printk(KERN_ERR"[1seg]broadcast_dmb_get_sig_info copy_to_user error!!! \n");
 		rc = ERROR;
@@ -205,7 +206,7 @@ static int broadcast_dmb_get_ch_info(void __user *arg)
 		return ERROR;
 	}
 
-	if(copy_from_user(&udata, arg, sizeof(struct broadcast_dmb_ch_info)))
+	if(copy_from_user(&udata, (void *)(unsigned long)arg, sizeof(struct broadcast_dmb_ch_info)))
 	{
 		printk(KERN_ERR"[1seg]broadcast_dmb_get_ch_info copy_from_user fail!!! \n");
 		rc = ERROR;		
@@ -215,7 +216,7 @@ static int broadcast_dmb_get_ch_info(void __user *arg)
 		rc = broadcast_drv_if_get_ch_info(&udata);
 	}
 
-	if(copy_to_user((void *)arg, &udata, sizeof(struct broadcast_dmb_ch_info)))
+	if(copy_to_user((void *)(unsigned long)arg, &udata, sizeof(struct broadcast_dmb_ch_info)))
 	{
 		printk(KERN_ERR"[1seg]broadcast_dmb_get_ch_info copy_to_user error!!! \n");
 		rc = ERROR;
@@ -284,7 +285,7 @@ static int8 broadcast_dmb_select_antenna(void __user *arg)
 	return rc;
 }
 
-static ssize_t broadcast_dmb_open_control(struct inode *inode, struct file *file)
+static Dynamic_32_64 broadcast_dmb_open_control(struct inode *inode, struct file *file)
 {
 	struct broadcast_dmb_chdevice *the_dev =
 	       container_of(inode->i_cdev, struct broadcast_dmb_chdevice, cdev);
@@ -330,7 +331,7 @@ static int broadcast_dmb_get_mode(void __user *arg)
 		return ERROR;
 	}
 	
-	if(copy_from_user(&udata, arg, sizeof(unsigned short)))
+	if(copy_from_user(&udata, (void *)(unsigned long)arg, sizeof(unsigned short)))
 	{
 		printk(KERN_ERR"[1seg]broadcast_dmb_get_mode copy_from_user fail!!! \n");
 		rc = ERROR;
@@ -345,7 +346,7 @@ static int broadcast_dmb_get_mode(void __user *arg)
 		return ERROR;
 	}
 
-	if(copy_to_user((void *)arg, &udata, sizeof(unsigned short)))
+	if(copy_to_user((void *)(unsigned long)arg, &udata, sizeof(unsigned short)))
 	{
 		printk(KERN_ERR"[1seg]broadcast_dmb_get_mode copy_to_user error!!! \n");
 		rc = ERROR;
@@ -357,7 +358,7 @@ static int broadcast_dmb_get_mode(void __user *arg)
 	return rc;
 }
 
-static long broadcast_dmb_ioctl_control(struct file *filep, unsigned int cmd,	unsigned long arg)
+static long broadcast_dmb_ioctl_control(struct file *filep, unsigned int cmd, unsigned long arg)
 {
 	int rc = -EINVAL;
 	void __user *argp = (void __user *)arg;
@@ -453,7 +454,16 @@ static long broadcast_dmb_ioctl_control(struct file *filep, unsigned int cmd,	un
 	return rc;
 }
 
-static ssize_t broadcast_dmb_release_control(struct inode *inode, struct file *file)
+#ifdef CONFIG_COMPAT
+static long broadcast_dmb_compat_ioctl_control(struct file *filep, unsigned int cmd,	unsigned long arg)
+{
+    return broadcast_dmb_ioctl_control(filep,cmd,(unsigned long)compat_ptr(arg));
+}
+#else
+#define broadcast_dmb_compat_ioctl_control NULL
+#endif
+
+static int broadcast_dmb_release_control(struct inode *inode, struct file *file)
 {
 	printk(KERN_DEBUG"[1seg]broadcast_dmb_release_control\n");
 	mmbi_tuner_drv_open  = -1; /* for MMBI-1seg tuner use competition */
@@ -465,6 +475,9 @@ static const struct file_operations broadcast_dmb_fops_control =
 	.owner = THIS_MODULE,
 	.open = broadcast_dmb_open_control,
 	.read = broadcast_dmb_read_control,
+#ifdef CONFIG_COMPAT
+    .compat_ioctl = broadcast_dmb_compat_ioctl_control,
+#endif
 	.unlocked_ioctl = broadcast_dmb_ioctl_control,
 	.release = broadcast_dmb_release_control,
 };
