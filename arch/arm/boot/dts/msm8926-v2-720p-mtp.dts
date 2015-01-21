@@ -10,17 +10,23 @@
  * GNU General Public License for more details.
  */
 
+
 /dts-v1/;
-/include/ "msm8226-v2.dtsi"
-/include/ "msm8226-1080p-cdp.dtsi"
-/include/ "msm8226-camera-sensor-cdp.dtsi"
+/include/ "msm8926-v2.dtsi"
+/include/ "msm8226-720p-mtp.dtsi"
+/include/ "msm8226-camera-sensor-mtp.dtsi"
 
 / {
-	model = "Qualcomm MSM 8226v2 CDP";
-	compatible = "qcom,msm8226-cdp", "qcom,msm8226", "qcom,cdp";
-	qcom,board-id = <1 2>;
+	model = "Qualcomm MSM 8926 MTP";
+	compatible = "qcom,msm8926-mtp", "qcom,msm8926", "qcom,mtp";
+	qcom,board-id = <8 0>;
 };
 
 &smsc_hub {
 	status = "ok";
+	smsc,model-id = <3502>;
+	smsc,reset-gpio = <&msmgpio 114 0x00>;
+	smsc,int-gpio = <&msmgpio 9 0x00>;
+	smsc,xo-clk-gpio = <&msmgpio 8 0x00>;
+	hub-int-supply = <&pm8226_l6>;
 };
