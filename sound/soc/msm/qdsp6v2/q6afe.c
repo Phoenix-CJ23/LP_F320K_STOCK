@@ -17,6 +17,7 @@
 #include <linux/wait.h>
 #include <linux/jiffies.h>
 #include <linux/sched.h>
+#include <linux/device.h>
 #include <linux/msm_audio_ion.h>
 #include <sound/apr_audio-v2.h>
 #include <sound/q6afe-v2.h>
@@ -31,6 +32,7 @@ enum {
 	AFE_AANC_TX_CAL,
 	MAX_AFE_CAL_TYPES
 };
+
 
 struct afe_ctl {
 	void *apr;
@@ -221,6 +223,7 @@ static int32_t afe_callback(struct apr_client_data *data, void *priv)
 	}
 	return 0;
 }
+
 
 int afe_get_port_type(u16 port_id)
 {
@@ -434,8 +437,9 @@ static void afe_send_cal_block(int32_t path, u16 port_id)
 	}
 
 	index = q6audio_get_port_index(port_id);
-	if (index < 0) {
-		pr_debug("%s: AFE port index invalid!\n", __func__);
+	if (index < 0 || index > AFE_MAX_PORTS) {
+		pr_debug("%s: AFE port index[%d] invalid!\n",
+				__func__, index);
 		goto done;
 	}
 
@@ -650,8 +654,9 @@ static int afe_send_hw_delay(u16 port_id, u32 rate)
 		goto fail_cmd;
 	}
 	index = q6audio_get_port_index(port_id);
-	if (index < 0) {
-		pr_debug("%s: AFE port index invalid!\n", __func__);
+	if (index < 0 || index > AFE_MAX_PORTS) {
+		pr_debug("%s: AFE port index[%d] invalid!\n",
+				__func__, index);
 		goto fail_cmd;
 	}
 
@@ -1433,7 +1438,6 @@ int afe_port_start(u16 port_id, union afe_port_config *afe_config,
 		pr_err("%s: AFE enable for port %#x failed\n", __func__,
 				port_id);
 		goto fail_cmd;
-
 	} else if (atomic_read(&this_afe.status) != 0) {
 		pr_err("%s: config cmd failed\n", __func__);
 		ret = -EINVAL;
@@ -1485,6 +1489,7 @@ int afe_get_port_index(u16 port_id)
 	case SLIMBUS_2_RX: return IDX_SLIMBUS_2_RX;
 	case SLIMBUS_2_TX: return IDX_SLIMBUS_2_TX;
 	case SLIMBUS_3_RX: return IDX_SLIMBUS_3_RX;
+	case SLIMBUS_3_TX: return IDX_SLIMBUS_3_TX;
 	case INT_BT_SCO_RX: return IDX_INT_BT_SCO_RX;
 	case INT_BT_SCO_TX: return IDX_INT_BT_SCO_TX;
 	case INT_BT_A2DP_RX: return IDX_INT_BT_A2DP_RX;
@@ -2365,6 +2370,8 @@ int afe_unregister_get_events(u16 port_id)
 	struct afe_service_cmd_unregister_rt_port_driver rtproxy;
 	int index = 0;
 
+	pr_debug("%s:\n", __func__);
+
 	if (this_afe.apr == NULL) {
 		this_afe.apr = apr_register("ADSP", "AFE", afe_callback,
 					0xFFFFFFFF, &this_afe);
@@ -2575,7 +2582,7 @@ static ssize_t afe_debug_write(struct file *filp,
 				goto afe_error;
 			}
 
-			if (param[1] < 0 || param[1] > 100) {
+			if (param[1] > 100) {
 				pr_err("%s: Error, volume shoud be 0 to 100 percentage param = %lu\n",
 					__func__, param[1]);
 				rc = -EINVAL;
@@ -2894,8 +2901,9 @@ int afe_close(int port_id)
 			__func__, pcm_afe_instance[port_id & 0x1]);
 		port_id = VIRTUAL_ID_TO_PORTID(port_id);
 		pcm_afe_instance[port_id & 0x1]--;
-		if (!(pcm_afe_instance[port_id & 0x1] == 0 &&
-			proxy_afe_instance[port_id & 0x1] == 0))
+		if ((!(pcm_afe_instance[port_id & 0x1] == 0 &&
+			proxy_afe_instance[port_id & 0x1] == 0)) ||
+			afe_close_done[port_id & 0x1] == true)
 			return 0;
 		else
 			afe_close_done[port_id & 0x1] = true;
@@ -2907,8 +2915,9 @@ int afe_close(int port_id)
 			__func__, proxy_afe_instance[port_id & 0x1]);
 		port_id = VIRTUAL_ID_TO_PORTID(port_id);
 		proxy_afe_instance[port_id & 0x1]--;
-		if (!(pcm_afe_instance[port_id & 0x1] == 0 &&
-			proxy_afe_instance[port_id & 0x1] == 0))
+		if ((!(pcm_afe_instance[port_id & 0x1] == 0 &&
+			proxy_afe_instance[port_id & 0x1] == 0)) ||
+			afe_close_done[port_id & 0x1] == true)
 			return 0;
 		else
 			afe_close_done[port_id & 0x1] = true;
@@ -3246,7 +3255,84 @@ int afe_spk_prot_feed_back_cfg(int src_port, int dst_port,
 fail_cmd:
 	return ret;
 }
+#ifdef CONFIG_SND_SOC_CS35L32
+int q6afe_set_rtip(int enable)
+{
+	struct afe_rtip_v1 set_param;
+	int ret = 0;
 
+	pr_debug("%s\n", __func__);
+	if (this_afe.apr == NULL) {
+		this_afe.apr = apr_register("ADSP", "AFE",afe_callback,
+					    0xFFFFFFFF, &this_afe);
+		pr_info("%s: Register AFE\n", __func__);
+		if (this_afe.apr == NULL) {
+			pr_err("%s: Unable to register AFE\n",__func__);
+			ret = -ENODEV;
+			return ret;
+		}
+	}
+	set_param.hdr.hdr_field = APR_HDR_FIELD(APR_MSG_TYPE_SEQ_CMD,
+						APR_HDR_LEN(20), APR_PKT_VER);
+
+	set_param.hdr.pkt_size = APR_PKT_SIZE(APR_HDR_SIZE,
+					      sizeof(set_param) - APR_HDR_SIZE);
+	set_param.hdr.src_port = 0;
+	set_param.hdr.dest_port = 0;
+	set_param.hdr.token = 0;
+	set_param.hdr.opcode = AFE_PORT_CMD_SET_PARAM_V2;
+	set_param.param.port_id = AFE_PORT_ID_QUATERNARY_MI2S_TX;
+	set_param.param.payload_size = (sizeof(set_param) - sizeof(struct apr_hdr) -
+				sizeof(struct afe_port_cmd_set_param_v2) -
+				sizeof(struct afe_param_rtip_enable));
+
+	set_param.param.payload_address_lsw = 0;
+	set_param.param.payload_address_msw = 0;
+	set_param.param.mem_map_handle = 0x00;
+	set_param.pdata.module_id = AFE_MODULE_RTIP_ENABLE;
+
+	switch (enable){
+		case 0:
+		case 1:
+			pr_debug("%s: enable/disable the module", __func__);
+			set_param.pdata.param_id = AFE_PARAM_RTIP_ENABLE;
+			set_param.pdata.param_size = sizeof(struct afe_param_rtip_enable);
+			set_param.rtip_t.enable = enable;
+			set_param.rtip_t.reserved = 0;
+		break;
+		case 2:
+		case 3:
+			pr_debug("%s: set/reset debugging of the module", __func__);
+			set_param.pdata.param_id = AFE_PARAM_RTIP_DEBUG;
+			set_param.pdata.param_size = sizeof(struct afe_param_rtip_enable);
+			set_param.rtip_t.enable = enable - 2;
+			set_param.rtip_t.reserved = 0;
+		break;
+		case 4:
+		case 5:
+			pr_debug("%s: set/reset performance monitoring of the module", __func__);
+			set_param.pdata.param_id = AFE_PARAM_RTIP_PERF;
+			set_param.pdata.param_size      = sizeof(struct afe_param_rtip_enable);
+			set_param.rtip_t.enable           = enable - 4;
+			set_param.rtip_t.reserved                 = 0;
+		break;
+		default:
+			return ret;
+	}
+
+	ret = afe_apr_send_pkt(&set_param, &this_afe.wait[0]);
+	if (ret < 0) {
+		pr_err("%s: AFE enable or disable RTIP failed\n", __func__);
+		ret = -EINVAL;
+		goto fail_cmd;
+	}
+
+	return 0;
+
+fail_cmd:
+	return	ret;
+}
+#endif
 static int __init afe_init(void)
 {
 	int i = 0;
